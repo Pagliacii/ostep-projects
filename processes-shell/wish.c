@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -70,9 +71,10 @@ int main(int argc, char *argv[]) {
 
     int rc, pid;
     char *token;
-    char *delimiter = " \t";
+    char *delimiter = " \t", *redirect_token = ">";
 
     FILE *stream;
+    int output_fd;
     size_t n;
     char *line = NULL;
 
@@ -132,11 +134,48 @@ int main(int argc, char *argv[]) {
                 char *arguments[3];
                 arguments[0] = strdup(token);
                 if (line != NULL) {
-                    arguments[1] = strdup(line);
-                    arguments[2] = NULL; // mark end of array
+                    char *output_file;
+                    char *found = trim_whitespace(strsep(&line, redirect_token));
+                    // check if contains arguments
+                    if (strcmp(found, "") != 0) {
+                        arguments[1] = strdup(found);
+                        arguments[2] = NULL; // mark end of array
+                    } else {
+                        arguments[1] = NULL;
+                    }
+
+                    // check if contains the redicrect token
+                    if (line) {
+                        // check if contains another redirect token
+                        found = trim_whitespace(strsep(&line, redirect_token));
+                        if (line) {
+                            error(EXIT_FAILURE);
+                        }
+
+                        // check if specifies more than one file
+                        output_file = trim_whitespace(strsep(&found, delimiter));
+                        if (found) {
+                            error(EXIT_FAILURE);
+                        }
+
+                        // redirect stdout and stderr to an output file
+                        output_fd = open(output_file, O_CREAT | O_WRONLY | O_TRUNC, S_IRWXU);
+                        if (output_fd < 0) {
+                            error(EXIT_FAILURE);
+                        }
+                        // redirect the child's stdout to the output file
+                        if (dup2(output_fd, STDOUT_FILENO) < 0) {
+                            error(EXIT_FAILURE);
+                        }
+                        // redirect the child's stderr to the output file
+                        if (dup2(output_fd, STDERR_FILENO) < 0) {
+                            error(EXIT_FAILURE);
+                        }
+                    }
                 } else {
                     arguments[1] = NULL; // mark end of array
                 }
+
                 for (int i = 0; i < MAX_PATH; i++) {
                     if (path[i] == NULL) {
                         rc = -1;
