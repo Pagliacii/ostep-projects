@@ -8,14 +8,11 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#define MAX_PATH 256
+#define MAX 256
 
-void error(int err_code) {
-    char error_message[30] = "An error has occured\n";
+void show_error_msg() {
+    char error_message[30] = "An error has occurred\n";
     write(STDERR_FILENO, error_message, strlen(error_message));
-    if (err_code != 0) {
-        exit(err_code);
-    }
 }
 
 // Note: This function returns a pointer to a substring of the original string.
@@ -62,14 +59,16 @@ bool endswith(const char *suffix, const char *str) {
 
 int main(int argc, char *argv[]) {
     if (argc > 2) {
-        error(EXIT_FAILURE);
+        show_error_msg();
+        exit(EXIT_FAILURE);
     }
 
     bool batch_mode = false;
     char prompt[7] = "wish> ";
-    char *path[MAX_PATH] = { "/bin", "/usr/bin", NULL };
+    char *path[MAX] = { "/bin", "/usr/bin", NULL };
 
-    int rc, pid;
+    int rc, p = 0;
+    pid_t pid[MAX];
     char *token, *command;
     char *delimiter = " \t", *redirect_token = ">", *parallel_token = "&";
 
@@ -81,7 +80,10 @@ int main(int argc, char *argv[]) {
     if (argc == 2) {
         batch_mode = true;
         stream = fopen(argv[1], "r");
-        if (stream == NULL) error(EXIT_FAILURE);
+        if (stream == NULL) {
+            show_error_msg();
+            exit(EXIT_FAILURE);
+        }
     } else {
         batch_mode = false;
         stream = stdin;
@@ -89,55 +91,68 @@ int main(int argc, char *argv[]) {
     }
 
     while (getline(&line, &n, stream) != -1) {
+        line = trim_whitespace(line);
+        if (strcmp(line, "") == 0) {
+            goto PROMPT;
+        }
         while ((command = trim_whitespace(strsep(&line, parallel_token))) != NULL) {
             token = trim_whitespace(strsep(&command, delimiter));
             command = trim_whitespace(command);
 
-            if (strcmp(token, "exit") == 0) {
+            if (strcmp(token, "") == 0) {
+                break;
+            } else if (strcmp(token, "exit") == 0) {
                 if (command != NULL) {
-                    error(EXIT_FAILURE);
+                    show_error_msg();
+                    continue;
                 }
                 exit(EXIT_SUCCESS);
             } else if (strcmp(token, "cd") == 0) {
                 if (command == NULL) {
-                    error(batch_mode);
+                    show_error_msg();
+                    continue;
                 }
                 char *dest = trim_whitespace(strsep(&command, delimiter));
                 rc = chdir(dest);
                 if (rc == -1) {
-                    error(batch_mode);
+                    show_error_msg();
                 }
             } else if (strcmp(token, "path") == 0) {
-                for (int i = 0; i < MAX_PATH; i++) {
-                    if (command != NULL) {
-                        path[i] = strdup(trim_whitespace(strsep(&command, delimiter)));
-                        if (command == NULL) {
-                            path[i + 1] = NULL;
-                            break;
-                        }
-                    } else if (path[i] == NULL) {
+                if (command == NULL) {
+                    path[0] = NULL;
+                }
+                for (int i = 0; i < MAX; i++) {
+                    if (path[i] == NULL) {
                         break;
-                    } else {
-                        printf("%s\n", path[i]);
+                    }
+
+                    path[i] = strdup(trim_whitespace(strsep(&command, delimiter)));
+                    if (command == NULL) {
+                        path[i + 1] = NULL;
+                        break;
                     }
                 }
             } else {
-                pid = fork();
-                if (pid < 0) {
+                pid[p] = fork();
+                if (pid[p] < 0) {
                     // fork failed, print error message
-                    error(batch_mode);
-                } else if (pid == 0) {
+                    show_error_msg();
+                } else if (pid[p] == 0) {
                     // child (new process)
-                    char exec_path[MAX_PATH];
-                    char *arguments[3];
+                    char *arguments[MAX];
                     arguments[0] = strdup(token);
                     if (command != NULL) {
                         char *output_file;
                         char *found = trim_whitespace(strsep(&command, redirect_token));
                         // check if contains arguments
                         if (strcmp(found, "") != 0) {
-                            arguments[1] = strdup(found);
-                            arguments[2] = NULL; // mark end of array
+                            int i = 1;
+                            char *argument;
+                            while ((argument = trim_whitespace(strsep(&found, delimiter))) != NULL && i < MAX - 1) {
+                                arguments[i] = strdup(argument);
+                                i++;
+                            }
+                            arguments[i++] = NULL; // mark end of array
                         } else {
                             arguments[1] = NULL;
                         }
@@ -147,49 +162,58 @@ int main(int argc, char *argv[]) {
                             // check if contains another redirect token
                             found = trim_whitespace(strsep(&command, redirect_token));
                             if (command) {
-                                free(found);
-                                error(EXIT_FAILURE);
+                                show_error_msg();
+                                exit(EXIT_FAILURE);
                             }
 
                             // check if specifies more than one file
                             output_file = trim_whitespace(strsep(&found, delimiter));
                             if (found) {
-                                free(found);
-                                error(EXIT_FAILURE);
+                                show_error_msg();
+                                exit(EXIT_FAILURE);
                             }
 
                             // redirect stdout and stderr to an output file
                             output_fd = open(output_file, O_CREAT | O_WRONLY | O_TRUNC, S_IRWXU);
-                            free(output_file);
                             if (output_fd < 0) {
-                                error(EXIT_FAILURE);
+                                show_error_msg();
+                                exit(EXIT_FAILURE);
                             }
                             // redirect the child's stdout to the output file
                             if (dup2(output_fd, STDOUT_FILENO) < 0) {
                                 close(output_fd);
-                                error(EXIT_FAILURE);
+                                show_error_msg();
+                                exit(EXIT_FAILURE);
                             }
                             // redirect the child's stderr to the output file
                             if (dup2(output_fd, STDERR_FILENO) < 0) {
                                 close(output_fd);
-                                error(EXIT_FAILURE);
+                                show_error_msg();
+                                exit(EXIT_FAILURE);
                             }
                         }
                     } else {
                         arguments[1] = NULL; // mark end of array
                     }
 
-                    for (int i = 0; i < MAX_PATH; i++) {
+                    for (int i = 0; i < MAX; i++) {
                         if (path[i] == NULL) {
                             rc = -1;
                             break;
                         }
+                        char *exec_path;
                         if (startswith("/", token)) {
-                            sprintf(exec_path, "%s", token);
+                            exec_path = malloc(sizeof(token));
+                            strcpy(exec_path, token);
                         } else if (endswith("/", path[i])) {
-                            sprintf(exec_path, "%s%s", path[i], token);
+                            exec_path = malloc(sizeof(path[i]) + sizeof(token) + 1);
+                            strcpy(exec_path, path[i]);
+                            strcat(exec_path, token);
                         } else {
-                            sprintf(exec_path, "%s/%s", path[i], token);
+                            exec_path = malloc(sizeof(path[i]) + sizeof(token) + sizeof("/") + 1);
+                            strcpy(exec_path, path[i]);
+                            strcat(exec_path, "/");
+                            strcat(exec_path, token);
                         }
                         if (access(exec_path, X_OK) == 0) {
                             // child process will block here if it can be invoked normally
@@ -198,18 +222,31 @@ int main(int argc, char *argv[]) {
                         }
                     }
                     if (rc == -1) {
-                        error(EXIT_FAILURE);
+                        show_error_msg();
+                        exit(EXIT_FAILURE);
                     }
                 } else {
-                    // parent goes down this path
-                    rc = waitpid(pid, NULL, 0);
-                    if (rc == -1) {
-                        error(batch_mode);
+                    if (++p >= MAX) {
+                        show_error_msg();
+                        if (batch_mode) {
+                            exit(EXIT_FAILURE);
+                        }
                     }
                 }
             }
         }
 
+        // parent goes down this path
+        while (p > 0) {
+            rc = waitpid(pid[--p], NULL, 0);
+            if (rc == -1) {
+                show_error_msg();
+                if (batch_mode) {
+                    exit(EXIT_FAILURE);
+                }
+            }
+        }
+PROMPT:
         if (!batch_mode) {
             printf("%s", prompt);
         }
@@ -217,8 +254,5 @@ int main(int argc, char *argv[]) {
 
     fclose(stream);
     close(output_fd);
-    free(token);
-    free(command);
-    free(line);
     return 0;
 }
