@@ -70,8 +70,8 @@ int main(int argc, char *argv[]) {
     char *path[MAX_PATH] = { "/bin", "/usr/bin", NULL };
 
     int rc, pid;
-    char *token;
-    char *delimiter = " \t", *redirect_token = ">";
+    char *token, *command;
+    char *delimiter = " \t", *redirect_token = ">", *parallel_token = "&";
 
     FILE *stream;
     int output_fd;
@@ -89,119 +89,123 @@ int main(int argc, char *argv[]) {
     }
 
     while (getline(&line, &n, stream) != -1) {
-        token = trim_whitespace(strsep(&line, delimiter));
-        line = trim_whitespace(line);
+        while ((command = trim_whitespace(strsep(&line, parallel_token))) != NULL) {
+            token = trim_whitespace(strsep(&command, delimiter));
+            command = trim_whitespace(command);
 
-        if (strcmp(token, "exit") == 0) {
-            if (line != NULL) {
-                error(EXIT_FAILURE);
-            }
-            free(line);
-            exit(EXIT_SUCCESS);
-        } else if (strcmp(token, "cd") == 0) {
-            if (line == NULL) {
-                error(batch_mode);
-            }
-            char *dest = trim_whitespace(strsep(&line, delimiter));
-            rc = chdir(dest);
-            free(line);
-            if (rc == -1) {
-                error(batch_mode);
-            }
-        } else if (strcmp(token, "path") == 0) {
-            for (int i = 0; i < MAX_PATH; i++) {
-                if (line != NULL) {
-                    path[i] = strdup(trim_whitespace(strsep(&line, delimiter)));
-                    if (line == NULL) {
-                        path[i + 1] = NULL;
-                        break;
-                    }
-                } else if (path[i] == NULL) {
-                    break;
-                } else {
-                    printf("%s\n", path[i]);
-                }
-            }
-            free(line);
-        } else {
-            pid = fork();
-            if (pid < 0) {
-                // fork failed, print error message
-                error(batch_mode);
-            } else if (pid == 0) {
-                // child (new process)
-                char exec_path[MAX_PATH];
-                char *arguments[3];
-                arguments[0] = strdup(token);
-                if (line != NULL) {
-                    char *output_file;
-                    char *found = trim_whitespace(strsep(&line, redirect_token));
-                    // check if contains arguments
-                    if (strcmp(found, "") != 0) {
-                        arguments[1] = strdup(found);
-                        arguments[2] = NULL; // mark end of array
-                    } else {
-                        arguments[1] = NULL;
-                    }
-
-                    // check if contains the redicrect token
-                    if (line) {
-                        // check if contains another redirect token
-                        found = trim_whitespace(strsep(&line, redirect_token));
-                        if (line) {
-                            error(EXIT_FAILURE);
-                        }
-
-                        // check if specifies more than one file
-                        output_file = trim_whitespace(strsep(&found, delimiter));
-                        if (found) {
-                            error(EXIT_FAILURE);
-                        }
-
-                        // redirect stdout and stderr to an output file
-                        output_fd = open(output_file, O_CREAT | O_WRONLY | O_TRUNC, S_IRWXU);
-                        if (output_fd < 0) {
-                            error(EXIT_FAILURE);
-                        }
-                        // redirect the child's stdout to the output file
-                        if (dup2(output_fd, STDOUT_FILENO) < 0) {
-                            error(EXIT_FAILURE);
-                        }
-                        // redirect the child's stderr to the output file
-                        if (dup2(output_fd, STDERR_FILENO) < 0) {
-                            error(EXIT_FAILURE);
-                        }
-                    }
-                } else {
-                    arguments[1] = NULL; // mark end of array
-                }
-
-                for (int i = 0; i < MAX_PATH; i++) {
-                    if (path[i] == NULL) {
-                        rc = -1;
-                        break;
-                    }
-                    if (startswith("/", token)) {
-                        sprintf(exec_path, "%s", token);
-                    } else if (endswith("/", path[i])) {
-                        sprintf(exec_path, "%s%s", path[i], token);
-                    } else {
-                        sprintf(exec_path, "%s/%s", path[i], token);
-                    }
-                    if (access(exec_path, X_OK) == 0) {
-                        // child process will block here if it can be invoked normally
-                        rc = execv(exec_path, arguments);
-                        break; // finish iterate if child process failed
-                    }
-                }
-                if (rc == -1) {
+            if (strcmp(token, "exit") == 0) {
+                if (command != NULL) {
                     error(EXIT_FAILURE);
                 }
-            } else {
-                // parent goes down this path
-                rc = waitpid(pid, NULL, 0);
+                exit(EXIT_SUCCESS);
+            } else if (strcmp(token, "cd") == 0) {
+                if (command == NULL) {
+                    error(batch_mode);
+                }
+                char *dest = trim_whitespace(strsep(&command, delimiter));
+                rc = chdir(dest);
                 if (rc == -1) {
                     error(batch_mode);
+                }
+            } else if (strcmp(token, "path") == 0) {
+                for (int i = 0; i < MAX_PATH; i++) {
+                    if (command != NULL) {
+                        path[i] = strdup(trim_whitespace(strsep(&command, delimiter)));
+                        if (command == NULL) {
+                            path[i + 1] = NULL;
+                            break;
+                        }
+                    } else if (path[i] == NULL) {
+                        break;
+                    } else {
+                        printf("%s\n", path[i]);
+                    }
+                }
+            } else {
+                pid = fork();
+                if (pid < 0) {
+                    // fork failed, print error message
+                    error(batch_mode);
+                } else if (pid == 0) {
+                    // child (new process)
+                    char exec_path[MAX_PATH];
+                    char *arguments[3];
+                    arguments[0] = strdup(token);
+                    if (command != NULL) {
+                        char *output_file;
+                        char *found = trim_whitespace(strsep(&command, redirect_token));
+                        // check if contains arguments
+                        if (strcmp(found, "") != 0) {
+                            arguments[1] = strdup(found);
+                            arguments[2] = NULL; // mark end of array
+                        } else {
+                            arguments[1] = NULL;
+                        }
+
+                        // check if contains the redicrect token
+                        if (command) {
+                            // check if contains another redirect token
+                            found = trim_whitespace(strsep(&command, redirect_token));
+                            if (command) {
+                                free(found);
+                                error(EXIT_FAILURE);
+                            }
+
+                            // check if specifies more than one file
+                            output_file = trim_whitespace(strsep(&found, delimiter));
+                            if (found) {
+                                free(found);
+                                error(EXIT_FAILURE);
+                            }
+
+                            // redirect stdout and stderr to an output file
+                            output_fd = open(output_file, O_CREAT | O_WRONLY | O_TRUNC, S_IRWXU);
+                            free(output_file);
+                            if (output_fd < 0) {
+                                error(EXIT_FAILURE);
+                            }
+                            // redirect the child's stdout to the output file
+                            if (dup2(output_fd, STDOUT_FILENO) < 0) {
+                                close(output_fd);
+                                error(EXIT_FAILURE);
+                            }
+                            // redirect the child's stderr to the output file
+                            if (dup2(output_fd, STDERR_FILENO) < 0) {
+                                close(output_fd);
+                                error(EXIT_FAILURE);
+                            }
+                        }
+                    } else {
+                        arguments[1] = NULL; // mark end of array
+                    }
+
+                    for (int i = 0; i < MAX_PATH; i++) {
+                        if (path[i] == NULL) {
+                            rc = -1;
+                            break;
+                        }
+                        if (startswith("/", token)) {
+                            sprintf(exec_path, "%s", token);
+                        } else if (endswith("/", path[i])) {
+                            sprintf(exec_path, "%s%s", path[i], token);
+                        } else {
+                            sprintf(exec_path, "%s/%s", path[i], token);
+                        }
+                        if (access(exec_path, X_OK) == 0) {
+                            // child process will block here if it can be invoked normally
+                            rc = execv(exec_path, arguments);
+                            break; // finish iterate if child process failed
+                        }
+                    }
+                    if (rc == -1) {
+                        error(EXIT_FAILURE);
+                    }
+                } else {
+                    // parent goes down this path
+                    rc = waitpid(pid, NULL, 0);
+                    if (rc == -1) {
+                        error(batch_mode);
+                    }
                 }
             }
         }
@@ -211,6 +215,10 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    fclose(stream);
+    close(output_fd);
+    free(token);
+    free(command);
     free(line);
     return 0;
 }
