@@ -76,7 +76,7 @@ arguments after the file name. For example, to just run a program (`test.cgi`)
 without any arguments, the client might use the URL
 `http://www.cs.wisc.edu/test.cgi`. To specify more arguments, the `?` and `&`
 characters are used, with the `?` character to separate the file name from the
-arguments and the `& character to separate each argument from the others.  For
+arguments and the `&` character to separate each argument from the others.  For
 example, `http://www.cs.wisc.edu/test.cgi?x=10&y=20` can be used to send
 multiple arguments `x` and `y` and their respective values to the program
 `test.cgi`. The program being run is called a **CGI program** (short for
